@@ -6,8 +6,10 @@ import os
 import re
 import shutil
 import sys
+import multiprocessing as mp
 from glob import glob
 from googleapiclient.discovery import build
+from concurrent.futures import ProcessPoolExecutor
 
 # API Key
 GOOGLE_API_KEY = '_key_'
@@ -35,19 +37,6 @@ def parse_args():
         help="file output directory. if not specified, the default path is '{}'".format(DEFAULT_OUTPUT_DIR))
     # オプション解析
     return argparser.parse_args()
-
-# モザイク処理(OpenCV)
-def mosaic_img(img_path, dest):
-    src = cv2.imread(img_path)
-    src_gray = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
-
-    face_cascade = cv2.CascadeClassifier(FACE_CASCADE_XML)
-    faces = face_cascade.detectMultiScale(src_gray)
-    if len(faces) > 0:
-        for x, y, w, h in faces:
-            print(x, y, w, h)
-            src = mosaic_area(src, x, y, w, h)
-    cv2.imwrite(dest, src)
 
 # モザイク処理(Dlib)
 def mosaic_img_with_cnn(img_path, dest):
@@ -94,22 +83,26 @@ def download_and_write_from_urls(urls, output_dir):
     if not os.path.exists(TEMP_DIR):
         # 一時ディレクトリの作成
         os.mkdir(TEMP_DIR)
-    for url in urls:
-        try:
-            response = requests.get(url)
-            image = response.content
-            file_name = url.split('/')[-1]
-            write_path = '{}/{}'.format(TEMP_DIR, file_name)
-            with open(write_path, 'wb') as f:
-                f.write(image)
-            # mosaic_img(write_path, '{}/{}'.format(output_dir, file_name))
-            mosaic_img_with_cnn(write_path, '{}/{}'.format(output_dir, file_name))
-        except requests.exceptions.RequestException as e:
-            print("エラー : ", e, file=sys.stderr)
     
+    ctx = mp.get_context("spawn")
+    with ProcessPoolExecutor(mp_context=ctx) as pool:
+        for url in urls:
+            pool.submit(process_download_and_mosaic, url, output_dir)
+
     # 一時ディレクトリ削除
     shutil.rmtree(TEMP_DIR)
 
+def process_download_and_mosaic(url, output_dir):
+    try:
+        response = requests.get(url)
+        image = response.content
+        file_name = url.split('/')[-1]
+        write_path = '{}/{}'.format(TEMP_DIR, file_name)
+        with open(write_path, 'wb') as f:
+            f.write(image)
+        mosaic_img_with_cnn(write_path, '{}/{}'.format(output_dir, file_name))
+    except requests.exceptions.RequestException as e:
+        print("エラー : ", e, file=sys.stderr)
 
 # Google画像読み込み
 def read_and_write_from_keyword(keyword, number, output_dir):
@@ -149,7 +142,6 @@ def read_and_write_from_dir(input_dir, output_dir):
     files = get_file_list(input_dir)
     for file in files:
         output_file = '{}/{}'.format(output_dir, os.path.basename(file))
-        # mosaic_img(file, output_file)
         mosaic_img_with_cnn(file, output_file)
 
 def get_file_list(input_dir):
@@ -173,4 +165,5 @@ def main():
     else:
         read_and_write_from_dir(args.input, args.output)
 
-main()
+if __name__ == '__main__':
+    main()
